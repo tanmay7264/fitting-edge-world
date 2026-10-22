@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { MapControls } from 'three/addons/controls/MapControls.js';
 import { WORLD } from './world.config.js';
+import { makeInteriors } from './interiors.js';
 
 const $ = s => document.querySelector(s);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -78,26 +79,52 @@ function signTexture(text, colour, px = 48) {
   g.fillText(text.toUpperCase(), 320, 58, 600);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
 }
+// Interior: floor, two full back walls (away from the camera, brand trim), two low front walls with a door gap, then props.
+const INTERIORS = makeInteriors({ THREE, mesh, mat, box, rnd, signTexture });
+function room(id, g, w, d, h, trimColour) {
+  const inside = new THREE.Group(), walls = new THREE.Group(), props = new THREE.Group();
+  inside.visible = false; g.add(inside); inside.add(walls, props);
+  const wallMat = mat('#F6F1E8', 'wall'), trim = mat(trimColour);
+  inside.add(mesh(box(w - 0.06, 0.04, d - 0.06), mat('#E9E4DA'), 0, 0.02, 0, false));
+  const H = h * 0.95;
+  const wall = (axis, pos, len, hh, gap) => {
+    for (const [a, b] of gap == null ? [[-len / 2, len / 2]] : [[-len / 2, gap - 0.42], [gap + 0.42, len / 2]]) {
+      const L = b - a, c = (a + b) / 2;
+      walls.add(axis === 'x' ? mesh(box(L, hh, 0.08), wallMat, c, hh / 2, pos) : mesh(box(0.08, hh, L), wallMat, pos, hh / 2, c));
+      if (hh > 0.5) walls.add(axis === 'x' ? mesh(box(L, 0.06, 0.1), trim, c, hh, pos) : mesh(box(0.1, 0.06, L), trim, pos, hh, c));
+    }
+  };
+  wall('x', -d / 2 + 0.04, w, H); wall('z', -w / 2 + 0.04, d, H);           // back walls
+  wall('x', d / 2 - 0.04, w, 0.3, 0); wall('z', w / 2 - 0.04, d, 0.3);      // low front walls, door gap facing the road
+  const fx = INTERIORS[id](props, w, d, h);
+  return { inside, walls, props, fx };
+}
+// Each building: plinth + an outer shell (own fading materials) that opens up to show the room inside.
 for (const z of WORLD.zones) {
-  const { id, x, z: zz, w, d, h, roof = "hip", color } = z;
+  const { id, x, z: zz, w, d, h, roof = 'hip', color } = z;
   const g = new THREE.Group(); g.position.copy(at(x, zz)); scene.add(g);
-  const body = mesh(box(w, h, d), new THREE.MeshStandardMaterial({ color: z.wall || '#F6F1E8', roughness: 0.85 }), 0, h / 2, 0);
-  g.add(mesh(box(w + 0.2, 0.14, d + 0.2), mat('#D6CCBA'), 0, 0.07, 0), body);          // plinth + body
+  const ext = new THREE.Group(), roofG = new THREE.Group(), shellMats = [];
+  const sm = (c, basic) => { const m = new (basic ? THREE.MeshBasicMaterial : THREE.MeshStandardMaterial)({ color: c, roughness: 0.85, transparent: true }); shellMats.push(m); return m; };
+  const body = mesh(box(w, h, d), sm(z.wall || '#F6F1E8'), 0, h / 2, 0);
+  g.add(mesh(box(w + 0.2, 0.14, d + 0.2), mat('#D6CCBA'), 0, 0.07, 0), ext); ext.add(body, roofG);
+  const glass = sm('#9CC3DE');
   for (let i = 0; i < Math.floor(w / 0.9); i++) {                                       // windows on the two camera-facing walls
     const wx = -w / 2 + 0.45 + i * 0.9 + (w % 0.9) / 2;
-    g.add(mesh(box(0.42, h * 0.32, 0.04), mat('#9CC3DE', 'glass'), wx, h * 0.55, d / 2 + 0.02, false));
+    if (Math.abs(wx) > 0.4) ext.add(mesh(box(0.42, h * 0.32, 0.04), glass, wx, h * 0.55, d / 2 + 0.02, false));
   }
   for (let i = 0; i < Math.floor(d / 0.9); i++) {
     const wz = -d / 2 + 0.45 + i * 0.9 + (d % 0.9) / 2;
-    g.add(mesh(box(0.04, h * 0.32, 0.42), mat('#9CC3DE', 'glass'), w / 2 + 0.02, h * 0.55, wz, false));
+    ext.add(mesh(box(0.04, h * 0.32, 0.42), glass, w / 2 + 0.02, h * 0.55, wz, false));
   }
-  g.add(mesh(box(0.5, h * 0.45, 0.05), mat('#6B5A48'), 0, h * 0.225, d / 2 + 0.03, false)); // door, faces +z
-  if (roof === 'flat') g.add(mesh(box(w + 0.16, 0.18, d + 0.16), mat(color), 0, h + 0.09, 0));
-  else { const geo = new THREE.ConeGeometry(1, Math.min(w, d) * 0.45, 4); geo.rotateY(Math.PI / 4); const r = mesh(geo, mat(color), 0, h + Math.min(w, d) * 0.225, 0); r.scale.set(w / 1.414 * 1.12, 1, d / 1.414 * 1.12); g.add(r); }
-  const sign = mesh(new THREE.PlaneGeometry(Math.min(w * 0.8, 3), 0.5), new THREE.MeshBasicMaterial({ map: signTexture(z.name, color), transparent: true }), 0, h * 0.86, d / 2 + 0.05, false);
-  g.add(sign);
+  ext.add(mesh(box(0.5, h * 0.45, 0.05), sm('#6B5A48'), 0, h * 0.225, d / 2 + 0.03, false)); // door, faces +z (the road)
+  let top;
+  if (roof === 'flat') { roofG.add(mesh(box(w + 0.16, 0.18, d + 0.16), sm(color), 0, h + 0.09, 0)); top = h + 0.18; }
+  else { const rh = Math.min(w, d) * 0.45, geo = new THREE.ConeGeometry(1, rh, 4); geo.rotateY(Math.PI / 4); const r = mesh(geo, sm(color), 0, h + rh / 2, 0); r.scale.set(w / 1.414 * 1.12, 1, d / 1.414 * 1.12); roofG.add(r); top = h + rh; }
+  const signMat = sm('#FFFFFF', true); signMat.map = signTexture(z.name, color);
+  ext.add(mesh(new THREE.PlaneGeometry(Math.min(w * 0.8, 3), 0.5), signMat, 0, h * 0.86, d / 2 + 0.05, false));
+  const o = objects[id] = { group: g, body, ext, roofG, shellMats, size: new THREE.Vector3(w, h, d), baseTop: top + 0.3, top: at(x, zz, top + 0.3), r: Math.max(w, d) * 0.75, open: 0, p: 0, c: 0 };
+  if (INTERIORS[id]) Object.assign(o, room(id, g, w, d, h, color));
   g.traverse(m => { if (m.isMesh) { m.userData.id = id; pickables.push(m); } });
-  objects[id] = { group: g, body, size: new THREE.Vector3(w, h, d), top: at(x, zz, h + Math.min(w, d) * 0.5 + 0.3), r: Math.max(w, d) * 0.75 };
 }
 
 /* ---------- Brand monument + phase signs painted on the ground ---------- */
@@ -152,7 +179,7 @@ function select(id) {
     outline = new THREE.LineSegments(new THREE.EdgesGeometry(box(o.size.x + 0.14, o.size.y, o.size.z + 0.14)), new THREE.LineBasicMaterial({ color: ACCENT }));
     outline.position.y = o.size.y / 2; o.group.add(outline);
     marker.position.copy(o.top); ring.position.set(o.group.position.x, 0.04, o.group.position.z); ring.scale.setScalar(o.r);
-    tween(o.group.position.clone().setY(0), Math.max(camera.zoom, 1.8));
+    tween(o.group.position.clone().setY(0), Math.max(camera.zoom, 2.2));
   }
   renderPanel();
   history.replaceState(null, '', id ? '#' + id : location.pathname);
@@ -277,7 +304,9 @@ let row = 0;
 for (const z of WORLD.zones) {
   const r = Math.max(0, R.rows.findIndex(rz => rz > z.z));                                          // the road row in front of the zone
   for (; row < r; row++) ROUTE.push([R.turns[row], R.rows[row]], [R.turns[row], R.rows[row + 1]]);
-  ROUTE.push([z.x, R.rows[r] - 0.35]); STOPS.push({ id: z.id, i: ROUTE.length - 1, look: at(z.x, z.z) });
+  const door = [z.x, z.z + z.d / 2 + 0.3], inside = [z.x, z.z + z.d / 2 - 0.85];                    // in through the door, then back out
+  ROUTE.push([z.x, R.rows[r]], door, inside); STOPS.push({ id: z.id, i: ROUTE.length - 1, look: at(z.x, z.z - z.d) });
+  ROUTE.push(door, [z.x, R.rows[r]]);
 }
 const pts = ROUTE.map(([x, z]) => at(x, z)), L = [0];
 for (let i = 1; i < pts.length; i++) L.push(L[i - 1] + pts[i].distanceTo(pts[i - 1]));
@@ -286,7 +315,7 @@ const posAt = (s, out) => {
   out.lerpVectors(pts[i], pts[i + 1], THREE.MathUtils.clamp((s - L[i]) / ((L[i + 1] - L[i]) || 1), 0, 1));
   return pts[i + 1].clone().sub(pts[i]);
 };
-const SPEED = 2.2, DWELL = 6.5, TRAIL = 0.8;
+const SPEED = 2.2, DWELL = 9, TRAIL = 0.8;
 const tour = { on: false, k: 0, s: 0, phase: 'walk', dwell: 0 };
 const tourEl = document.createElement('div'); tourEl.className = 'card tour'; document.body.append(tourEl);
 function renderTour() {
@@ -323,6 +352,39 @@ function updateTour(dt, t) {
     camera.position.add(controls.target.clone().sub(before));
   }
 }
+// Which building the tour is in (or about to enter): it opens up as the walkers reach the door.
+const tourHere = () => tour.on && (tour.phase === 'dwell' || L[STOPS[tour.k].i] - tour.s < 2) ? STOPS[tour.k].id : null;
+
+/* ---------- Ambient life: a branded delivery van on the road, people chatting outside ---------- */
+const VAN = [R.start]; R.rows.forEach((rz, i) => { if (i < R.turns.length) VAN.push([R.turns[i], rz], [R.turns[i], R.rows[i + 1]]); });
+VAN.push(R.end);
+const vpts = VAN.map(([x, z]) => at(x, z)), VL = [0];
+for (let i = 1; i < vpts.length; i++) VL.push(VL[i - 1] + vpts[i].distanceTo(vpts[i - 1]));
+const van = new THREE.Group(); scene.add(van);
+{ const b = new THREE.Group(); b.position.y = 0.12; van.add(b);
+  b.add(mesh(box(0.95, 0.5, 0.46), mat('#1E1F22'), -0.1, 0.3, 0), mesh(box(0.32, 0.38, 0.44), mat(WORLD.colors.trim), 0.5, 0.24, 0),
+    mesh(box(0.04, 0.16, 0.38), mat('#9CC3DE', 'glass'), 0.66, 0.32, 0, false), mesh(box(0.96, 0.06, 0.47), mat(WORLD.colors.trim), -0.1, 0.36, 0, false));
+  for (const [wx, wz] of [[-0.35, 0.22], [-0.35, -0.22], [0.42, 0.22], [0.42, -0.22]]) { const wh = mesh(new THREE.CylinderGeometry(0.11, 0.11, 0.08, 12), mat('#2B2530'), wx, 0, wz); wh.rotation.x = Math.PI / 2; b.add(wh); }
+  const logo = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.14), new THREE.MeshBasicMaterial({ map: signTexture('Fitting Edge', '#1E1F22', 52), transparent: true })); logo.position.set(-0.1, 0.3, 0.235); b.add(logo); }
+let vanS = 0, vanDir = 1;
+function updateVan(dt) {
+  vanS += vanDir * dt * 1.6;
+  if (vanS > VL.at(-1) || vanS < 0) { vanDir *= -1; vanS = THREE.MathUtils.clamp(vanS, 0, VL.at(-1)); }
+  let i = 0; while (i < VL.length - 2 && VL[i + 1] < vanS) i++;
+  const dir = vpts[i + 1].clone().sub(vpts[i]).normalize().multiplyScalar(vanDir);
+  van.position.lerpVectors(vpts[i], vpts[i + 1], (vanS - VL[i]) / ((VL[i + 1] - VL[i]) || 1));
+  van.position.add(new THREE.Vector3(dir.z, 0, -dir.x).multiplyScalar(0.38));   // keep to the left lane, away from the walkers
+  van.rotation.y = Math.atan2(-dir.z, dir.x);
+}
+const chatters = [];
+for (const id of ['hardwater', 'pilots', 'plumbers', 'dealers', 'studio', 'b2b', 'global']) {
+  const z = WORLD.zones.find(o => o.id === id); if (!z) continue;
+  const cx = z.x + z.w / 2 + 0.75, cz = z.z + z.d / 2 - 0.4, SH = ['#4BA3C7', '#E08A3C', '#7FA38A', '#7B6E9E', '#C8A15A', '#B0563F'];
+  [[-0.28, 0], [0.28, 0]].forEach(([dx], k) => {
+    const r = person(id === 'plumbers' ? '#E08A3C' : SH[Math.floor(rnd() * SH.length)], k ? '#2F3B52' : '#5C6470', ['#2B2023', '#1F1B2D', '#6B4A2E'][k]);
+    r.g.position.copy(at(cx + dx, cz)); r.g.rotation.y = k ? Math.PI : 0; r.pose = k ? 'listen' : 'talk'; chatters.push(r);
+  });
+}
 
 function resize() {
   const w = canvas.clientWidth, h = canvas.clientHeight, a = w / h, fr = a < 1 ? FR / a * 0.75 : FR; // portrait: widen
@@ -350,6 +412,25 @@ renderer.setAnimationLoop(() => {
   controls.update();
   if (!reduceMotion) { pin.position.y = Math.sin(t * 2.4) * 0.12; ring.material.opacity = 0.35 + Math.sin(t * 2.4) * 0.25; }
   updateTour(dt, t);
+  if (!reduceMotion) { updateVan(dt); for (const r of chatters) animate(r, t); }
+  const here = tourHere(), open = tour.on ? here : selected;
+  for (const z of WORLD.zones) {                           // open up: roof lifts, shell fades, walls rise, the room plays
+    const o = objects[z.id]; if (!o.inside) continue;
+    const want = z.id === open ? 1 : 0;
+    o.open += (want - o.open) * (reduceMotion ? 1 : Math.min(1, dt * 2.5));
+    const k = o.open;
+    o.ext.visible = k < 0.99;
+    for (const m of o.shellMats) { m.opacity = 1 - k; m.depthWrite = k < 0.5; }
+    o.roofG.position.y = k * 1.6; o.body.castShadow = k < 0.5;
+    o.top.y = o.baseTop + k * 1.6;                         // the label rises with the roof
+    o.inside.visible = k > 0.01;
+    o.walls.scale.y = Math.max(0.001, k); o.props.visible = k > 0.35;
+    if (!o.inside.visible) { o.p = o.c = 0; continue; }
+    if (z.id === here) o.p = tour.phase === 'dwell' ? 1 - tour.dwell / DWELL : 0;
+    else { o.c += dt / DWELL; o.p = reduceMotion ? 1 : Math.min(1, o.c % 1.4); } // opened by a click: play, hold, replay
+    o.fx(o.p, reduceMotion ? 0 : t);
+  }
+  if (selected) marker.position.copy(objects[selected].top);
   renderer.render(scene, camera);
   const w = canvas.clientWidth, h = canvas.clientHeight;
   for (const l of labels) {

@@ -15,7 +15,7 @@ export const WORLD = {
   // [x, z, w, d]: the S-shaped road (top-left corner + size)
   paths: [[-1, 7.3, 31, 1.4], [28.6, 7.3, 1.4, 9.4], [2, 15.3, 28, 1.4], [2, 15.3, 1.4, 10.4], [2, 24.3, 29, 1.4]],
   // Walk-through road: start point, row centre lines (z) and the x where the road turns down to the next row
-  road: { start: [-0.5, 8], rows: [8, 16, 25], turns: [29.3, 2.7] },
+  road: { start: [-0.5, 8], rows: [8, 16, 25], turns: [29.3, 2.7], end: [30.5, 25] },
   // Phase signs painted on the ground: [x, z, text, colour]
   phases: [[15.5, 9.75, 'Phase 1 · Seed · Months 1–6', '#5E8C66'], [15.5, 17.4, 'Phase 2 · Expand · Months 7–18', '#3F7FA6'], [15.5, 27.2, 'Phase 3 · Scale · Months 19–36', '#A67C3A']],
   // Brand monument at the start of the road
